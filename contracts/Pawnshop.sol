@@ -20,7 +20,7 @@ contract Pawnshop is NFTHandler{
     
     struct Participant {
         address account;
-        uint256 amount;
+        uint256 amount;//note by Andres: require to add status to claim funds
     }
     
     mapping(uint256 => Participant[]) participants;
@@ -45,7 +45,7 @@ contract Pawnshop is NFTHandler{
         uint256 tokenId;
         address tokenContract;
         
-        Status status;
+        Status status;//Note By Andres: require to add status to claim NFT
     }
     
     Lending[] lendings;
@@ -98,7 +98,7 @@ contract Pawnshop is NFTHandler{
             _debtTerm,
             _tokenId,
             _tokenContract,
-            Status.Review
+            Status.Review//Note by Andres: add status to claim NFT
             )
         );
 
@@ -140,7 +140,7 @@ contract Pawnshop is NFTHandler{
             lendings[_lendingId].status = Status.ReadyToLend;
         }
         
-        participants[_lendingId].push( Participant(msg.sender, msg.value));
+        participants[_lendingId].push( Participant(msg.sender, msg.value));//Note By Andres: add status to claimm funds after paid
     }
     
     function lockLending(uint256 _lendingId) private {
@@ -190,7 +190,8 @@ contract Pawnshop is NFTHandler{
                     returnNFT(id);
                 }        
             } else if(status == Status.ReadyToLend) {
-                payable(lendings[id].borrower).transfer(lendings[id].amount);
+                payable(lendings[id].borrower).transfer(lendings[id].amount);/*Note By Andres: probably could be changed 
+                to claim funds intead of transfer from us*/
                 lockLending(id);
             } 
             else if(status == Status.Locked) {
@@ -199,11 +200,11 @@ contract Pawnshop is NFTHandler{
                     lendings[id].status = Status.ForSale;/////MODIFIED TO BUY THE NFT INSTEAD OF TERMINATED
                 }
             } else if(status == Status.Paid) {
-                distributePayments(id);
-                returnNFT(id);
+                distributePayments(id);/*Note by Andres: distribute payment has to change to status to claim funds*/
+                returnNFT(id);//Note By Andres: instead of return NFT, change status to be claimed by the owner
                 lendings[id].status = Status.Terminated;
             } else if(status == Status.Sold){
-                distributePayments(id);
+                distributePayments(id);/*Note by Andres: distribute payment has to change to status to claim funds*/
                 lendings[id].status = Status.Terminated;
             }
         }
@@ -211,7 +212,7 @@ contract Pawnshop is NFTHandler{
         
     }
     
-    function returnFunds(uint256 _lendingId) private {
+    function returnFunds(uint256 _lendingId) private {//Note By Andres: instead of return,change the status to claim by investors
         uint256 participantsLen = participants[_lendingId].length;
         Participant[] memory lendParticipants = participants[_lendingId];
 
@@ -222,12 +223,12 @@ contract Pawnshop is NFTHandler{
         }
     }
     
-    function returnNFT(uint256 _lendingId) private {
+    function returnNFT(uint256 _lendingId) private {//Note By Andres: instead of return, change the status to be claimed
         psTransferNFT(lendings[_lendingId].borrower, lendings[_lendingId].tokenId, lendings[_lendingId].tokenContract);
     }
     
     
-    function pay(uint256 _lendingId) public payable {
+    function pay(uint256 _lendingId) public payable {//Note By Andres: add here the change of status to claim NFT and funds
         require(msg.value == lendings[_lendingId].debt, "Payment must be equal to debt.");
         require(lendings[_lendingId].status == Status.Locked, "Payment not allowed, status: locked.");
         require(block.timestamp < lendings[_lendingId].endTime, "Payment not allowed, end time reached.");
@@ -243,7 +244,7 @@ contract Pawnshop is NFTHandler{
         lendings[_lendingId].status = Status.Sold;
     }
     
-    function distributePayments(uint256 _lendingId) private {
+    function distributePayments(uint256 _lendingId) private {//Note by Andres: change this function to use status to claim funds
         require(lendings[_lendingId].status == Status.Paid || lendings[_lendingId].status == Status.Sold, "Distribution of payments not allowed.");
 
         uint256 participantsLen = participants[_lendingId].length;
