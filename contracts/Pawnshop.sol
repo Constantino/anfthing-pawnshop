@@ -1,26 +1,31 @@
 // SPDX-License-Identifier: MIT 
 pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import "./NFTHandler.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 
-contract Pawnshop is NFTHandler{
-    
+import "./NFTHandler.sol";
+import "./interfaces/IPawnshop.sol";
+
+contract Pawnshop is NFTHandler, IPawnshop, AccessControl {
+
+	bytes32 public constant BACKEND_ROLE = keccak256("BACKEND_ROLE");
+
     uint256 dailyInterestRate;
-    address owner;
     uint256 chunkSize;
     uint256 counter;
-    uint256 public xlastTimeStamp;
+    
     constructor(uint256 _rate, uint256 _chunkSize){
         dailyInterestRate = _rate;
         chunkSize = _chunkSize;
-        owner = msg.sender;
+        _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
+        _setupRole(BACKEND_ROLE, _msgSender());
     }
     
     enum Status { Review, Open, ReadyToLend, Locked, Paid, ForSale, Sold, Terminated }
     
     struct Participant {
         address account;
-        uint256 amount;//Note By Andres: need to add status to claim the funds
+        uint256 amount;
     }
     
     mapping(uint256 => Participant[]) participants;
@@ -45,43 +50,45 @@ contract Pawnshop is NFTHandler{
         uint256 tokenId;
         address tokenContract;
         
-        Status status;//Note By Andres: need to add status to cllaim the NFT after pay
+        Status status;
     }
-
+    
     mapping(uint256 => Lending) lendings;
     
-    function setDailyInterestRate(uint256 _rate) public {
+    event RefundLender (address indexed user, uint256 amount);
+    event DistributedPayment (address indexed user, uint256 amount);
+    
+    function setDailyInterestRate(uint256 _rate) external override onlyRole(DEFAULT_ADMIN_ROLE) {
         dailyInterestRate = _rate;
     }
 
-    function getDailyInterestRate() view public returns(uint256) {
+    function getDailyInterestRate() view external override returns(uint256) {
         return dailyInterestRate;
     }
     
-    function setChunkSize(uint256 _chunkSize) public {
+    function setChunkSize(uint256 _chunkSize) override external onlyRole(DEFAULT_ADMIN_ROLE) {
         chunkSize = _chunkSize;
     }
     
-    function borrow(uint256 _amount, uint256 _expirationTerm, uint256 _debtTerm, uint256 _tokenId, address _tokenContract) public {
+    function borrow(uint256 _amount, uint256 _expirationTerm, uint256 _debtTerm, uint256 _tokenId, address _tokenContract) public override{
         require(_amount >= chunkSize, "Amount requested is too small.");
         require(_amount%chunkSize == 0, "Please provide an amount in multiples of the chunk size.");
         require(_expirationTerm > 1, "Please provide an expiration term greater than 1 day.");
         require(_debtTerm > 1, "Please provide a debt term greater than 1 day.");
         
         uint256 openingTime = block.timestamp;
-        //uint256 reviewingTime = block.timestamp+86400; // now + 1 day
-        //TODO: MAKING IT 1 MIN JUST FOR TESTNG
-        //uint256 reviewingTime = block.timestamp+60; // now + 1 day
+        // TODO: uint256 reviewingTime = block.timestamp+86400; // now + 1 day
+        // MAKING IT 1 MIN JUST FOR TESTNG
         uint256 reviewingTime = block.timestamp+60; // now + 1 day
         // closingTime equals openingTime + X days
-        //uint256 closingTime = openingTime+86400*_expirationTerm;
-        // TODO: MAKING IT 1.5 MIN JUST FOR TESTING
-        //uint256 closingTime = openingTime+60*_expirationTerm;
+        // TODO: uint256 closingTime = openingTime+86400*_expirationTerm;
+        // MAKING IT 1 MIN JUST FOR TESTING
         uint256 closingTime = openingTime+60*_expirationTerm;
+
         uint256 chunkPrice = chunkNFT(_amount);
-        
-        lendings[counter] = Lending(
-            counter,
+        uint256 lendingId = counter;
+        lendings[lendingId] = Lending(
+            lendingId,
             msg.sender,
             _amount,
             chunkPrice,
@@ -96,13 +103,13 @@ contract Pawnshop is NFTHandler{
             _debtTerm,
             _tokenId,
             _tokenContract,
-            Status.Review//Note By Andres:add status to claim NFT after pay
+            Status.Review
             );
 
         counter++;
     }
     
-    function getChunkSize() view public returns(uint256) {
+    function getChunkSize() view external returns(uint256) {
         return chunkSize;
     }
     
@@ -111,17 +118,17 @@ contract Pawnshop is NFTHandler{
         uint256 chunkPrice = _amount/chunkSize;
         
         return chunkPrice;
-    } 
-
+    }
+    
     function getLending(uint256 _lendingId) public view returns (Lending memory) {
         return lendings[_lendingId];
     }
 
-    function getParticipants(uint256 _lendingId) public view returns (Participant[] memory) {
+    function getParticipants(uint256 _lendingId) external view returns (Participant[] memory) {
         return participants[_lendingId];
     }
     
-    function lend(uint256 _lendingId) public payable {
+    function lend(uint256 _lendingId) external override payable {
         require(lendings[_lendingId].status == Status.Open, "Lending opportunity is not open.");
         require(msg.value >= lendings[_lendingId].chunkPrice, "Please provide an amount in multiples of the chunk size.");
         require(msg.value%lendings[_lendingId].chunkPrice == 0, "Please provide an amount in multiples of the chunk size.");
@@ -133,7 +140,7 @@ contract Pawnshop is NFTHandler{
             lendings[_lendingId].status = Status.ReadyToLend;
         }
         
-        participants[_lendingId].push( Participant(msg.sender, msg.value));//Note By Andres: add status to claim funds
+        participants[_lendingId].push( Participant(msg.sender, msg.value));
     }
     
     function lockLending(uint256 _lendingId) private {
@@ -146,14 +153,12 @@ contract Pawnshop is NFTHandler{
         lendings[_lendingId].debt = lendings[_lendingId].amount + interest;
         
     }
+    
+    function updateStatus(uint256 _lendingId) external override onlyRole(BACKEND_ROLE) returns(bool) {
+        require(lendings[_lendingId].status != Status.Terminated, "Lending is terminated."); 
+        uint256 currentTimestamp = block.timestamp;            
 
-    function updateStatus(uint256 _lendingId) public returns(bool){
-        uint256 currentTimestamp = block.timestamp;
-
-        if (lendings[_lendingId].status == Status.Terminated) {
-                return false;
-                
-        } else if(lendings[_lendingId].status == Status.Review) {
+       if(lendings[_lendingId].status == Status.Review) {
             
             ERC721 xContract = ERC721(lendings[_lendingId].tokenContract);
             address currentOwner = xContract.ownerOf(lendings[_lendingId].tokenId);
@@ -173,10 +178,10 @@ contract Pawnshop is NFTHandler{
             if(currentTimestamp >= lendings[_lendingId].closingTime){
                 lendings[_lendingId].status = Status.Terminated;
                 // Return funds to participants
-                returnFunds(_lendingId);//Note By Andres: use claim funds and NFT instead
+                returnFunds(_lendingId);
                 returnNFT(_lendingId);
             }        
-        } else if(lendings[_lendingId].status == Status.ReadyToLend) {//Note By Andres: instead of transfer enable claim
+        } else if(lendings[_lendingId].status == Status.ReadyToLend) {
             payable(lendings[_lendingId].borrower).transfer(lendings[_lendingId].amount);
             lockLending(_lendingId);
         } 
@@ -186,37 +191,37 @@ contract Pawnshop is NFTHandler{
                 lendings[_lendingId].status = Status.ForSale;
             }
         } else if(lendings[_lendingId].status == Status.Paid) {
-            //Note By Andres: Instead of distribute payment only set status to claim funds and NFT
             distributePayments(_lendingId);
             returnNFT(_lendingId);
             lendings[_lendingId].status = Status.Terminated;
         } else if(lendings[_lendingId].status == Status.Sold){
-            //Note By Andres: instead of  distribute payment only use the status to allow claiming the funds
             distributePayments(_lendingId);
             lendings[_lendingId].status = Status.Terminated;
         }
 
         return true;
     }
-    
-    function returnFunds(uint256 _lendingId) private { //Note By Andres: allow investors to claim their funds
+
+    function singleStatusUpdater(uint256 _lendingid) external override onlyRole(BACKEND_ROLE) {}
+
+    function returnFunds(uint256 _lendingId) private {
         uint256 participantsLen = participants[_lendingId].length;
         Participant[] memory lendParticipants = participants[_lendingId];
 
         if(participantsLen > 0) {
             for(uint256 i; i < participantsLen; i++) {
                 payable(lendParticipants[i].account).transfer(lendParticipants[i].amount);
+                emit RefundLender(lendParticipants[i].account, lendParticipants[i].amount);
             }
         }
     }
     
-    function returnNFT(uint256 _lendingId) private {//Note By Andres: change to state to claim NFT
+    function returnNFT(uint256 _lendingId) private {
         psTransferNFT(lendings[_lendingId].borrower, lendings[_lendingId].tokenId, lendings[_lendingId].tokenContract);
     }
     
     
-    function pay(uint256 _lendingId) public payable {
-        //Note By Andres: in this function change all the status to claimable for funds and NFT
+    function pay(uint256 _lendingId) external payable override {
         require(msg.value == lendings[_lendingId].debt, "Payment must be equal to debt.");
         require(lendings[_lendingId].status == Status.Locked, "Payment not allowed, status: locked.");
         require(block.timestamp < lendings[_lendingId].endTime, "Payment not allowed, end time reached.");
@@ -224,8 +229,7 @@ contract Pawnshop is NFTHandler{
     }
 
     // ADDING FUNCTION TO BUY THE NFT 
-    function buy(uint256 _lendingId)public payable{
-        //Note By Andres: in this function change all the status to claimable for funds and NFT
+    function buy(uint256 _lendingId)external payable override{
         require(msg.value == lendings[_lendingId].debt, "Check the price for this");
         require(lendings[_lendingId].status == Status.ForSale, "Payment not allowed, this NFT is not for sale yet");
         require(block.timestamp > lendings[_lendingId].endTime, "Payment not allowed, this NFT is not for sale yet");
@@ -234,7 +238,6 @@ contract Pawnshop is NFTHandler{
     }
     
     function distributePayments(uint256 _lendingId) private {
-        //Note By Andres: this function should  work only to set the new amount investors will be able to claim
         require(lendings[_lendingId].status == Status.Paid || lendings[_lendingId].status == Status.Sold, "Distribution of payments not allowed.");
 
         uint256 participantsLen = participants[_lendingId].length;
@@ -244,6 +247,7 @@ contract Pawnshop is NFTHandler{
                 uint256 proportion = participants[_lendingId][i].amount/lendings[_lendingId].amount;
                 uint256 proportionalAmount = proportion*lendings[_lendingId].debt;
                 payable(participants[_lendingId][i].account).transfer(proportionalAmount);
+                emit DistributedPayment(participants[_lendingId][i].account, proportionalAmount);
             }
         }
     }
